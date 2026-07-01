@@ -441,22 +441,28 @@ app.get('/api/facebook/batch', async (req, res) => {
     console.log(`[Apify Batch] Got ${items.length} result(s) from dataset`);
 
     // Map each input URL to its scraped result — match by post ID first, then exact URL
-    const results = urls.map(url => {
-      const urlBase  = url.split('?')[0].replace(/\/$/, '');
-      const inputId  = extractFbPostId(url);
+    const results = urls.map((url, urlIdx) => {
+      const urlBase     = url.split('?')[0].replace(/\/$/, '');
+      const inputId     = extractFbPostId(url);
+      const isShareLink = /\/share\/(p|r|v)\//.test(url);
 
       const post = items.find(it => {
-        const itUrl  = (it.facebookUrl || it.url || it.link || '').split('?')[0].replace(/\/$/, '');
-        const itId   = extractFbPostId(itUrl) || String(it.legacyId || '') || String(it.postId || '');
+        const itUrl      = (it.facebookUrl || it.url || it.link || '').split('?')[0].replace(/\/$/, '');
+        const itInputUrl = (it.inputUrl || '').split('?')[0].replace(/\/$/, '');
+        const itId       = extractFbPostId(itUrl) || String(it.legacyId || '') || String(it.postId || '');
 
-        // 1. Match by post ID (most reliable)
+        // 1. Match by post ID
         if (inputId && itId && inputId === itId) return true;
-        // 2. Exact URL match (ignoring query params + trailing slash)
+        // 2. Exact URL match
         if (itUrl === urlBase) return true;
-        // 3. Apify sometimes returns a canonical URL — check if it contains our post ID
+        // 3. Match via Apify's inputUrl (best for share/p/ redirects)
+        if (itInputUrl && itInputUrl === urlBase) return true;
+        if (itInputUrl && inputId && itInputUrl.includes(inputId)) return true;
+        // 4. Canonical URL contains share code
         if (inputId && itUrl.includes(inputId)) return true;
         return false;
-      });
+      // 5. Fallback: if all URLs are share links and item count matches, match by position
+      }) || (isShareLink && items.length === urls.length ? items[urlIdx] : null);
 
       if (!post || post.error) {
         console.log(`[Apify Batch] No match for ${url.slice(-50)}`);

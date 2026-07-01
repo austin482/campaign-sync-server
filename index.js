@@ -599,6 +599,39 @@ app.get('/api/facebook', async (req, res) => {
   }
 });
 
+// ─── GET /api/facebook/debug — raw Apify output for one URL ──────────────────
+app.get('/api/facebook/debug', async (req, res) => {
+  try {
+    let url = req.query.url;
+    if (!url) return res.status(400).json({ error: 'url param required' });
+    if (url.startsWith('facebook.com')) url = 'https://www.' + url;
+    if (url.startsWith('www.facebook.com')) url = 'https://' + url;
+
+    const reelMatch = url.match(/facebook\.com\/reel\/(\d+)/);
+    if (reelMatch) url = `https://www.facebook.com/watch/?v=${reelMatch[1]}`;
+
+    const apifyToken = getApifyToken();
+    const runResp = await fetch(
+      `https://api.apify.com/v2/acts/apify~facebook-posts-scraper/runs?token=${apifyToken}`,
+      { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ startUrls: [{ url }], maxPosts: 1, maxPostComments: 0, proxyConfiguration: { useApifyProxy: true } }) }
+    );
+    const runBody = await runResp.json();
+    if (!runBody.data?.id) return res.json({ error: 'Run failed', runBody });
+
+    const runId = runBody.data.id;
+    const datasetId = runBody.data.defaultDatasetId;
+    let status = 'RUNNING';
+    for (let i = 0; i < 40 && !['SUCCEEDED','FAILED','ABORTED'].includes(status); i++) {
+      await new Promise(r => setTimeout(r, 3000));
+      const s = await fetch(`https://api.apify.com/v2/actor-runs/${runId}?token=${apifyToken}`);
+      status = (await s.json()).data?.status;
+    }
+    const items = await (await fetch(`https://api.apify.com/v2/datasets/${datasetId}/items?token=${apifyToken}&clean=true`)).json();
+    res.json({ resolvedUrl: url, status, itemCount: items.length, items });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 // ─── GET /api/apify/balance — check remaining Apify credits ──────────────────
 app.get('/api/apify/balance', async (req, res) => {
   try {

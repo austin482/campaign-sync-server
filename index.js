@@ -25,6 +25,33 @@ app.use(express.json());
 let cachedToken = null;
 let tokenExpiresAt = 0;
 
+// ─── APIFY TOKEN POOL ─────────────────────────────────────────────────────────
+// Support multiple tokens via APIFY_API_TOKENS=token1,token2,token3
+// Falls back to APIFY_API_TOKEN for backward compatibility
+const apifyTokenPool = (process.env.APIFY_API_TOKENS || process.env.APIFY_API_TOKEN || '')
+  .split(',').map(t => t.trim()).filter(Boolean);
+let apifyTokenIndex = 0;
+
+function getApifyToken() {
+  return apifyTokenPool[apifyTokenIndex] || null;
+}
+
+function switchToNextApifyToken() {
+  if (apifyTokenPool.length <= 1) return false;
+  const prev = apifyTokenIndex;
+  apifyTokenIndex = (apifyTokenIndex + 1) % apifyTokenPool.length;
+  console.log(`[Apify] ⚠️ Token #${prev + 1} exhausted → switching to token #${apifyTokenIndex + 1} of ${apifyTokenPool.length}`);
+  return true;
+}
+
+function isApifyQuotaError(body) {
+  // Detect billing/quota errors from Apify API response
+  const msg = JSON.stringify(body || '').toLowerCase();
+  return msg.includes('payment') || msg.includes('insufficient') ||
+         msg.includes('credit') || msg.includes('limit exceeded') ||
+         msg.includes('quota') || msg.includes('402');
+}
+
 async function getTenantAccessToken() {
   const now = Date.now();
   if (cachedToken && now < tokenExpiresAt - 60000) return cachedToken;
@@ -177,25 +204,34 @@ app.get('/api/instagram/batch', async (req, res) => {
     urls = urls.filter(Boolean);
     if (urls.length === 0) return res.json({ results: [] });
 
-    const apifyToken = process.env.APIFY_API_TOKEN;
-    if (!apifyToken) return res.status(500).json({ error: 'APIFY_API_TOKEN not set' });
+    let apifyToken = getApifyToken();
+    if (!apifyToken) return res.status(500).json({ error: 'No Apify token configured' });
 
-    console.log(`[Apify Instagram] Starting run for ${urls.length} URL(s)...`);
+    console.log(`[Apify Instagram] Starting run for ${urls.length} URL(s)... (token #${apifyTokenIndex + 1}/${apifyTokenPool.length})`);
 
-    const runResp = await fetch(
-      `https://api.apify.com/v2/acts/apify~instagram-scraper/runs?token=${apifyToken}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          directUrls: urls,
-          resultsType: 'posts',
-          resultsLimit: 1,
-          addParentData: false,
-        }),
+    let runBody;
+    for (let attempt = 0; attempt < apifyTokenPool.length; attempt++) {
+      const runResp = await fetch(
+        `https://api.apify.com/v2/acts/apify~instagram-scraper/runs?token=${apifyToken}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            directUrls: urls,
+            resultsType: 'posts',
+            resultsLimit: 1,
+            addParentData: false,
+          }),
+        }
+      );
+      runBody = await runResp.json();
+      if (runResp.status === 402 || isApifyQuotaError(runBody)) {
+        if (!switchToNextApifyToken()) throw new Error('All Apify tokens exhausted');
+        apifyToken = getApifyToken();
+        continue;
       }
-    );
-    const runBody = await runResp.json();
+      break;
+    }
     if (!runBody.data?.id) throw new Error('Failed to start Apify run: ' + JSON.stringify(runBody));
 
     const runId = runBody.data.id;
@@ -254,22 +290,29 @@ app.get('/api/threads/batch', async (req, res) => {
     urls = urls.filter(Boolean);
     if (urls.length === 0) return res.json({ results: [] });
 
-    const apifyToken = process.env.APIFY_API_TOKEN;
-    if (!apifyToken) return res.status(500).json({ error: 'APIFY_API_TOKEN not set' });
+    let apifyToken = getApifyToken();
+    if (!apifyToken) return res.status(500).json({ error: 'No Apify token configured' });
 
-    console.log(`[Apify Threads] Starting run for ${urls.length} URL(s)...`);
+    console.log(`[Apify Threads] Starting run for ${urls.length} URL(s)... (token #${apifyTokenIndex + 1}/${apifyTokenPool.length})`);
 
-    const runResp = await fetch(
-      `https://api.apify.com/v2/acts/7xFgGDhba8W5ZvOke/runs?token=${apifyToken}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          startUrls: urls.map(url => ({ url })),
-        }),
+    let runBody;
+    for (let attempt = 0; attempt < apifyTokenPool.length; attempt++) {
+      const runResp = await fetch(
+        `https://api.apify.com/v2/acts/7xFgGDhba8W5ZvOke/runs?token=${apifyToken}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ urls: urls.map(url => ({ url })) }),
+        }
+      );
+      runBody = await runResp.json();
+      if (runResp.status === 402 || isApifyQuotaError(runBody)) {
+        if (!switchToNextApifyToken()) throw new Error('All Apify tokens exhausted');
+        apifyToken = getApifyToken();
+        continue;
       }
-    );
-    const runBody = await runResp.json();
+      break;
+    }
     if (!runBody.data?.id) throw new Error('Failed to start Apify Threads run: ' + JSON.stringify(runBody));
 
     const runId = runBody.data.id;
@@ -328,10 +371,10 @@ app.get('/api/facebook/batch', async (req, res) => {
     urls = urls.filter(Boolean);
     if (urls.length === 0) return res.json({ results: [] });
 
-    const apifyToken = process.env.APIFY_API_TOKEN;
-    if (!apifyToken) return res.status(500).json({ error: 'APIFY_API_TOKEN not set in .env' });
+    let apifyToken = getApifyToken();
+    if (!apifyToken) return res.status(500).json({ error: 'No Apify token configured' });
 
-    console.log(`[Apify Batch] Starting run for ${urls.length} URL(s)...`);
+    console.log(`[Apify Batch] Starting run for ${urls.length} URL(s)... (token #${apifyTokenIndex + 1}/${apifyTokenPool.length})`);
 
     // Helper: extract post ID from a Facebook URL (numeric OR alphanumeric share IDs)
     function extractFbPostId(url) {
@@ -345,6 +388,8 @@ app.get('/api/facebook/batch', async (req, res) => {
     }
 
     // ONE Apify run for ALL URLs — maxPosts:1 so we only get the exact post per URL
+    let runBody;
+    for (let attempt = 0; attempt < apifyTokenPool.length; attempt++) {
     const runResp = await fetch(
       `https://api.apify.com/v2/acts/apify~facebook-posts-scraper/runs?token=${apifyToken}`,
       {
@@ -358,7 +403,14 @@ app.get('/api/facebook/batch', async (req, res) => {
         }),
       }
     );
-    const runBody = await runResp.json();
+      runBody = await runResp.json();
+      if (runResp.status === 402 || isApifyQuotaError(runBody)) {
+        if (!switchToNextApifyToken()) throw new Error('All Apify tokens exhausted');
+        apifyToken = getApifyToken();
+        continue;
+      }
+      break;
+    }
     if (!runBody.data?.id) throw new Error('Failed to start Apify run: ' + JSON.stringify(runBody));
 
     const runId     = runBody.data.id;
@@ -431,8 +483,8 @@ app.get('/api/facebook', async (req, res) => {
     const { url } = req.query;
     if (!url) return res.status(400).json({ error: 'url is required' });
 
-    const apifyToken = process.env.APIFY_API_TOKEN;
-    if (!apifyToken) return res.status(500).json({ error: 'APIFY_API_TOKEN not set in .env' });
+    let apifyToken = getApifyToken();
+    if (!apifyToken) return res.status(500).json({ error: 'No Apify token configured' });
 
     // Step 1: Start Apify facebook-posts-scraper run
     const runResp = await fetch(
@@ -500,24 +552,38 @@ app.get('/api/facebook', async (req, res) => {
 // ─── GET /api/apify/balance — check remaining Apify credits ──────────────────
 app.get('/api/apify/balance', async (req, res) => {
   try {
-    const apifyToken = process.env.APIFY_API_TOKEN;
-    if (!apifyToken) return res.status(500).json({ error: 'APIFY_API_TOKEN not set' });
+    if (apifyTokenPool.length === 0) return res.status(500).json({ error: 'No Apify token configured' });
 
-    const resp = await fetch(`https://api.apify.com/v2/users/me?token=${apifyToken}`);
-    const body = await resp.json();
-    const data = body.data || {};
-    const plan = data.plan  || {};
+    // Fetch balance for ALL tokens in the pool
+    const balances = await Promise.all(apifyTokenPool.map(async (token, idx) => {
+      try {
+        const resp = await fetch(`https://api.apify.com/v2/users/me?token=${token}`);
+        const body = await resp.json();
+        const data = body.data || {};
+        const plan = data.plan || {};
+        const limitUsd  = plan.monthlyUsageCreditsUsd ?? null;
+        const usedUsd   = data.monthlyUsage?.USD ?? 0;
+        const remaining = limitUsd !== null ? Math.max(0, limitUsd - usedUsd) : null;
+        return {
+          tokenIndex: idx + 1,
+          active:     idx === apifyTokenIndex,
+          used:       parseFloat(usedUsd.toFixed(3)),
+          limit:      limitUsd !== null ? parseFloat(limitUsd.toFixed(2)) : null,
+          remaining:  remaining !== null ? parseFloat(remaining.toFixed(2)) : null,
+          isFree:     !!plan.isFreeAccount,
+          planName:   plan.name || 'Free',
+        };
+      } catch {
+        return { tokenIndex: idx + 1, active: idx === apifyTokenIndex, error: 'Failed to fetch' };
+      }
+    }));
 
-    const limitUsd  = plan.monthlyUsageCreditsUsd ?? null; // null = unlimited
-    const usedUsd   = data.monthlyUsage?.USD ?? 0;
-    const remaining = limitUsd !== null ? Math.max(0, limitUsd - usedUsd) : null;
-
+    // For backward compat: also return top-level fields based on active token
+    const active = balances[apifyTokenIndex] || balances[0];
     res.json({
-      used:      parseFloat(usedUsd.toFixed(3)),
-      limit:     limitUsd  !== null ? parseFloat(limitUsd.toFixed(2))  : null,
-      remaining: remaining !== null ? parseFloat(remaining.toFixed(2)) : null,
-      isFree:    !!plan.isFreeAccount,
-      planName:  plan.name || 'Free',
+      ...active,
+      totalTokens: apifyTokenPool.length,
+      tokens: balances,
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -529,5 +595,5 @@ app.listen(PORT, () => {
   console.log(`\n✅ Lark Metrics Proxy running on http://localhost:${PORT}`);
   console.log(`   Domain:      ${LARK_DOMAIN}`);
   console.log(`   Lark App ID: ${process.env.LARK_APP_ID ? '✓ set' : '✗ MISSING'}`);
-  console.log(`   Apify Token: ${process.env.APIFY_API_TOKEN ? '✓ set' : '— not set (Facebook disabled)'}\n`);
+  console.log(`   Apify Tokens: ${apifyTokenPool.length} configured (active: #${apifyTokenIndex + 1})\n`);
 });

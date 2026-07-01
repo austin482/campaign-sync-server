@@ -390,7 +390,28 @@ app.get('/api/facebook/batch', async (req, res) => {
       return m ? m[1] : null;
     }
 
-    // ONE Apify run for ALL URLs — maxPosts:1 so we only get the exact post per URL
+    // Resolve share/p/ short links to actual post URLs before sending to Apify
+    async function resolveShareUrl(url) {
+      if (!/\/share\/(p|r|v)\//.test(url)) return url;
+      try {
+        const resp = await fetch(url, {
+          method: 'GET',
+          redirect: 'manual',
+          headers: { 'User-Agent': 'Mozilla/5.0 (compatible; Googlebot/2.1)' },
+        });
+        const loc = resp.headers.get('location');
+        if (loc && loc.includes('facebook.com')) {
+          console.log(`[URL Resolve] ${url.slice(-40)} → ${loc.slice(-60)}`);
+          return loc.split('?')[0]; // strip tracking params
+        }
+      } catch (e) { console.log(`[URL Resolve] Failed: ${e.message}`); }
+      return url;
+    }
+
+    const resolvedUrls = await Promise.all(urls.map(resolveShareUrl));
+    console.log('[Apify Batch] Resolved URLs:', resolvedUrls.map(u => u.slice(-50)));
+
+    // ONE Apify run for ALL URLs
     let runBody;
     for (let attempt = 0; attempt < apifyTokenPool.length; attempt++) {
     const runResp = await fetch(
@@ -399,8 +420,8 @@ app.get('/api/facebook/batch', async (req, res) => {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          startUrls: urls.map(url => ({ url })),
-          maxPosts: 1,           // ← was 3; now only the exact requested post
+          startUrls: resolvedUrls.map(url => ({ url })),
+          maxPosts: 1,
           maxPostComments: 0,
           proxyConfiguration: { useApifyProxy: true },
         }),

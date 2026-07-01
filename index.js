@@ -390,26 +390,42 @@ app.get('/api/facebook/batch', async (req, res) => {
       return m ? m[1] : null;
     }
 
-    // Resolve share/p/ short links to actual post URLs before sending to Apify
-    async function resolveShareUrl(url) {
-      if (!/\/share\/(p|r|v)\//.test(url)) return url;
-      try {
-        const resp = await fetch(url, {
-          method: 'GET',
-          redirect: 'manual',
-          headers: { 'User-Agent': 'Mozilla/5.0 (compatible; Googlebot/2.1)' },
-        });
-        const loc = resp.headers.get('location');
-        if (loc && loc.includes('facebook.com')) {
-          console.log(`[URL Resolve] ${url.slice(-40)} → ${loc.slice(-60)}`);
-          return loc.split('?')[0]; // strip tracking params
-        }
-      } catch (e) { console.log(`[URL Resolve] Failed: ${e.message}`); }
+    // Normalize + resolve Facebook URLs before sending to Apify
+    async function normalizeFbUrl(url) {
+      // 1. Ensure https://www. prefix
+      if (url.startsWith('facebook.com')) url = 'https://www.' + url;
+      if (url.startsWith('www.facebook.com')) url = 'https://' + url;
+
+      // 2. Convert /reel/ID → /watch/?v=ID (Apify handles this better)
+      const reelMatch = url.match(/facebook\.com\/reel\/(\d+)/);
+      if (reelMatch) {
+        url = `https://www.facebook.com/watch/?v=${reelMatch[1]}`;
+        console.log(`[URL Normalize] Reel → watch: ${url}`);
+        return url;
+      }
+
+      // 3. Resolve share/p/, share/r/, share/v/ short links via redirect
+      if (/\/share\/(p|r|v)\//.test(url)) {
+        try {
+          const resp = await fetch(url, {
+            method: 'GET',
+            redirect: 'manual',
+            headers: { 'User-Agent': 'Mozilla/5.0 (compatible; Googlebot/2.1)' },
+          });
+          const loc = resp.headers.get('location');
+          if (loc && loc.includes('facebook.com')) {
+            const resolved = loc.split('?')[0];
+            console.log(`[URL Resolve] ${url.slice(-40)} → ${resolved.slice(-60)}`);
+            return resolved;
+          }
+        } catch (e) { console.log(`[URL Resolve] Failed: ${e.message}`); }
+      }
+
       return url;
     }
 
-    const resolvedUrls = await Promise.all(urls.map(resolveShareUrl));
-    console.log('[Apify Batch] Resolved URLs:', resolvedUrls.map(u => u.slice(-50)));
+    const resolvedUrls = await Promise.all(urls.map(normalizeFbUrl));
+    console.log('[Apify Batch] Resolved URLs:', resolvedUrls.map(u => u.slice(-60)));
 
     // ONE Apify run for ALL URLs
     let runBody;

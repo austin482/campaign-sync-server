@@ -379,11 +379,14 @@ app.get('/api/facebook/batch', async (req, res) => {
     // Helper: extract post ID from a Facebook URL (numeric OR alphanumeric share IDs)
     function extractFbPostId(url) {
       if (!url) return null;
-      const m = url.match(/\/posts\/(\d+)/)         ||
-                url.match(/\/permalink\/(\d+)/)      ||  // groups/GROUP_ID/permalink/POST_ID
-                url.match(/[?&]story_fbid=(\d+)/)   ||
-                url.match(/[?&]fbid=(\d+)/)         ||
-                url.match(/\/share\/p\/([A-Za-z0-9]+)/); // share/p/XXXXX short links
+      const m = url.match(/\/posts\/(\d+)/)            ||
+                url.match(/\/permalink\/(\d+)/)         ||  // groups/GROUP_ID/permalink/POST_ID
+                url.match(/[?&]story_fbid=(\d+)/)      ||
+                url.match(/[?&]fbid=(\d+)/)            ||
+                url.match(/\/reel\/(\d+)/)             ||  // Facebook Reels
+                url.match(/\/videos\/(\d+)/)           ||  // Facebook Videos
+                url.match(/\/share\/r\/([A-Za-z0-9]+)/) || // shared reels short links
+                url.match(/\/share\/p\/([A-Za-z0-9]+)/);  // shared post short links
       return m ? m[1] : null;
     }
 
@@ -459,12 +462,17 @@ app.get('/api/facebook/batch', async (req, res) => {
         console.log(`[Apify Batch] No match for ${url.slice(-50)}`);
         return { url, comments: null, shares: null, likes: null, collects: null };
       }
+
+      const isReel = url.includes('/reel/') || url.includes('/share/r/');
       return {
         url,
-        comments: post.commentsCount ?? post.comments ?? null,
-        shares:   post.sharesCount   ?? post.shares   ?? null,
-        likes:    post.likesCount    ?? post.likes     ?? post.reactionsCount ?? null,
-        collects: null,
+        comments: post.commentsCount  ?? post.comments        ?? post.commentCount ?? null,
+        shares:   post.sharesCount    ?? post.shares           ?? post.shareCount   ??
+                  post.videoShareCount ?? post.reshareCount    ?? null,
+        likes:    post.likesCount     ?? post.likes            ?? post.likeCount    ??
+                  post.reactionsCount ?? post.reactionCount    ??
+                  post.videoLikeCount ?? null,
+        collects: isReel ? (post.videoViewCount ?? post.viewCount ?? post.videoPlayCount ?? null) : null,
       };
     });
 

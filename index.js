@@ -463,7 +463,6 @@ app.get('/api/facebook/batch', async (req, res) => {
         return { url, comments: null, shares: null, likes: null, collects: null };
       }
 
-      const isReel = url.includes('/reel/') || url.includes('/share/r/');
       return {
         url,
         comments: post.commentsCount  ?? post.comments        ?? post.commentCount ?? null,
@@ -472,7 +471,7 @@ app.get('/api/facebook/batch', async (req, res) => {
         likes:    post.likesCount     ?? post.likes            ?? post.likeCount    ??
                   post.reactionsCount ?? post.reactionCount    ??
                   post.videoLikeCount ?? null,
-        collects: isReel ? (post.videoViewCount ?? post.viewCount ?? post.videoPlayCount ?? null) : null,
+        collects: null,
       };
     });
 

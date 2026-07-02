@@ -205,10 +205,13 @@ app.get('/api/instagram/batch', async (req, res) => {
     urls = urls.filter(Boolean);
     if (urls.length === 0) return res.json({ results: [] });
 
+    // Deduplicate before sending to Apify (duplicates cause API rejection)
+    const uniqueUrls = [...new Set(urls)];
+
     let apifyToken = getApifyToken();
     if (!apifyToken) return res.status(500).json({ error: 'No Apify token configured' });
 
-    console.log(`[Apify Instagram] Starting run for ${urls.length} URL(s)... (token #${apifyTokenIndex + 1}/${apifyTokenPool.length})`);
+    console.log(`[Apify Instagram] Starting run for ${uniqueUrls.length} unique URL(s) of ${urls.length} total (token #${apifyTokenIndex + 1}/${apifyTokenPool.length})`);
 
     let runBody;
     for (let attempt = 0; attempt < apifyTokenPool.length; attempt++) {
@@ -218,7 +221,7 @@ app.get('/api/instagram/batch', async (req, res) => {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            directUrls: urls,
+            directUrls: uniqueUrls,
             resultsType: 'posts',
             resultsLimit: 1,
             addParentData: false,
@@ -426,7 +429,12 @@ app.get('/api/facebook/batch', async (req, res) => {
     }
 
     const resolvedUrls = await Promise.all(urls.map(normalizeFbUrl));
-    console.log('[Apify Batch] Resolved URLs:', resolvedUrls.map(u => u.slice(-60)));
+
+    // Deduplicate resolved URLs before sending to Apify — same post URL may appear
+    // in multiple sheet rows (e.g. separate Comment/Share tracking rows).
+    // The final results mapping below still covers all original urls[].
+    const uniqueResolvedUrls = [...new Set(resolvedUrls)];
+    console.log(`[Apify Batch] Resolved ${urls.length} URL(s) → ${uniqueResolvedUrls.length} unique`);
 
     // ONE Apify run for ALL URLs
     let runBody;
@@ -437,7 +445,7 @@ app.get('/api/facebook/batch', async (req, res) => {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          startUrls: resolvedUrls.map(url => ({ url })),
+          startUrls: uniqueResolvedUrls.map(url => ({ url })),
           maxPosts: 1,
           maxPostComments: 0,
           proxyConfiguration: { useApifyProxy: true },
@@ -499,8 +507,8 @@ app.get('/api/facebook/batch', async (req, res) => {
         // 4. Canonical URL contains share code
         if (inputId && itUrl.includes(inputId)) return true;
         return false;
-      // 5. Fallback: if all URLs are share links and item count matches, match by position
-      }) || (isShareLink && items.length === urls.length ? items[urlIdx] : null);
+      // 5. Fallback: if all URLs are share links and item count matches unique count, match by resolved URL position
+      }) || (isShareLink && items.length === uniqueResolvedUrls.length ? items[uniqueResolvedUrls.indexOf(resolvedUrls[urlIdx])] : null);
 
       if (!post || post.error) {
         console.log(`[Apify Batch] No match for ${url.slice(-50)}`);

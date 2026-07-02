@@ -689,4 +689,16 @@ app.listen(PORT, () => {
   console.log(`   Domain:      ${LARK_DOMAIN}`);
   console.log(`   Lark App ID: ${process.env.LARK_APP_ID ? '✓ set' : '✗ MISSING'}`);
   console.log(`   Apify Tokens: ${apifyTokenPool.length} configured (active: #${apifyTokenIndex + 1})\n`);
+
+  // ── Keep-alive ping (Render free tier spins down after 15 min idle) ──────────
+  // Self-ping every 13 minutes so the server stays warm during sync sessions.
+  const PUBLIC_URL = process.env.RENDER_EXTERNAL_URL || process.env.PUBLIC_URL;
+  if (PUBLIC_URL) {
+    setInterval(() => {
+      fetch(`${PUBLIC_URL}/api/health`)
+        .then(() => console.log('[KeepAlive] ping ok'))
+        .catch(e => console.warn('[KeepAlive] ping failed:', e.message));
+    }, 13 * 60 * 1000); // every 13 minutes
+    console.log(`   Keep-alive: pinging ${PUBLIC_URL}/api/health every 13 min`);
+  }
 });

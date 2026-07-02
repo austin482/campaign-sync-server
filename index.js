@@ -151,12 +151,22 @@ app.get('/api/sheet', async (req, res) => {
     if (data.code !== 0) return res.status(500).json({ error: `Lark API error: [${data.code}] ${data.msg}` });
 
     const values = data.data?.valueRange?.values || [];
-    res.json({ values, range: cellRange });
+
+    // Parse the actual start row from the returned range (e.g. "sheetId!A3:Z1000" → startRow=3)
+    // This ensures the client always knows the exact sheet row for values[0],
+    // even if the Lark API trims leading empty rows or the caller passes a custom range.
+    const returnedRange = data.data?.valueRange?.range || cellRange;
+    const startRowMatch = returnedRange.match(/[A-Z]+(\d+)/);
+    const startRow = startRowMatch ? parseInt(startRowMatch[1], 10) : 1;
+
+    res.json({ values, range: returnedRange, startRow });
   } catch (err) {
     console.error('[/api/sheet]', err.message);
     res.status(500).json({ error: err.message });
   }
 });
+
+
 
 // ─── WRITE CELL VALUES ───────────────────────────────────────────────────────
 app.put('/api/sheet/update', async (req, res) => {

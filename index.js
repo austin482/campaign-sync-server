@@ -486,32 +486,33 @@ app.get('/api/facebook/batch', async (req, res) => {
     const items = await itemsResp.json();
     console.log(`[Apify Batch] Got ${items.length} result(s) from dataset`);
 
-    // Map each input URL to its scraped result — match by post ID first, then exact URL
+    // Map each input URL to its scraped result
     const results = urls.map((url, urlIdx) => {
-      const urlBase     = url.split('?')[0].replace(/\/$/, '');
-      const inputId     = extractFbPostId(url);
-      const isShareLink = /\/share\/(p|r|v)\//.test(url);
+      const resolvedUrl  = resolvedUrls[urlIdx];
+      const urlBase      = url.split('?')[0].replace(/\/$/, '');
+      const resolvedBase = resolvedUrl.split('?')[0].replace(/\/$/, '');
+      const inputId      = extractFbPostId(url) || extractFbPostId(resolvedUrl);
 
       const post = items.find(it => {
         const itUrl      = (it.facebookUrl || it.url || it.link || '').split('?')[0].replace(/\/$/, '');
         const itInputUrl = (it.inputUrl || '').split('?')[0].replace(/\/$/, '');
         const itId       = extractFbPostId(itUrl) || String(it.legacyId || '') || String(it.postId || '');
 
-        // 1. Match by post ID
+        // 1. Match by post ID extracted from either original or resolved URL
         if (inputId && itId && inputId === itId) return true;
-        // 2. Exact URL match
+        // 2. Exact match on original URL
         if (itUrl === urlBase) return true;
-        // 3. Match via Apify's inputUrl (best for share/p/ redirects)
-        if (itInputUrl && itInputUrl === urlBase) return true;
-        if (itInputUrl && inputId && itInputUrl.includes(inputId)) return true;
-        // 4. Canonical URL contains share code
-        if (inputId && itUrl.includes(inputId)) return true;
+        // 3. Exact match on resolved URL (handles share/p/ redirects)
+        if (itUrl === resolvedBase) return true;
+        // 4. Match via Apify inputUrl field against resolved URL
+        if (itInputUrl && (itInputUrl === urlBase || itInputUrl === resolvedBase)) return true;
+        // 5. URL contains share code or post ID
+        if (inputId && (itUrl.includes(inputId) || itInputUrl.includes(inputId))) return true;
         return false;
-      // 5. Fallback: if all URLs are share links and item count matches unique count, match by resolved URL position
-      }) || (isShareLink && items.length === uniqueResolvedUrls.length ? items[uniqueResolvedUrls.indexOf(resolvedUrls[urlIdx])] : null);
+      });
 
       if (!post || post.error) {
-        console.log(`[Apify Batch] No match for ${url.slice(-50)}`);
+        console.log(`[Apify Batch] No match for ${url.slice(-50)} (resolved: ${resolvedUrl.slice(-50)})`);
         return { url, comments: null, shares: null, likes: null, collects: null };
       }
 
